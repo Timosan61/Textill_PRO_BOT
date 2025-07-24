@@ -24,4 +24,4 @@ RUN mkdir -p /app/logs
 ENV PYTHONPATH=/app
 
 # Запускаем бота
-CMD ["python", "bot/main.py"]
+CMD ["python", "-m", "uvicorn", "webhook:app", "--host", "0.0.0.0", "--port", "$PORT"]
