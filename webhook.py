@@ -1,5 +1,5 @@
 """
-🤖 Artyom Integrator Webhook Server
+🤖 Textile Pro Bot Webhook Server
 
 Основной сервер для обработки сообщений через Telegram Business API.
 Работает в режиме webhook для мгновенных ответов от имени консультанта Елены из Textile Pro.
@@ -26,7 +26,7 @@ import requests
 # Добавляем путь для импорта модулей бота
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-print("🚀 Загрузка Artyom Integrator Webhook Server...")
+print("🚀 Загрузка Textile Pro Bot Webhook Server...")
 
 # Пытаемся импортировать AI agent
 try:
@@ -48,7 +48,7 @@ except Exception as e:
 
 # === НАСТРОЙКИ ===
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN", "artyom_integrator_secret_2025")
+WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN", "textil_pro_business_secret_2025")
 
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("❌ TELEGRAM_BOT_TOKEN отсутствует!")
@@ -127,7 +127,7 @@ def send_business_message(chat_id, text, business_connection_id):
 
 # === FASTAPI ПРИЛОЖЕНИЕ ===
 app = FastAPI(
-    title="🤖 Artyom Integrator Bot", 
+    title="🤖 Textile Pro Bot", 
     description="Webhook-only режим для Textile Pro консультанта Елены"
 )
 
@@ -143,7 +143,7 @@ async def health_check():
         bot_info = bot.get_me()
         return {
             "status": "🟢 ONLINE", 
-            "service": "Artyom Integrator Webhook",
+            "service": "Textile Pro Bot Webhook",
             "bot": f"@{bot_info.username}",
             "bot_id": bot_info.id,
             "mode": "WEBHOOK_ONLY",
@@ -183,7 +183,7 @@ async def set_webhook_get():
 async def set_webhook():
     """Установка webhook"""
     try:
-        webhook_url = "https://artyom-integrator-production.up.railway.app/webhook"
+        webhook_url = "https://bot-production-472c.up.railway.app/webhook"
         
         result = bot.set_webhook(
             url=webhook_url,
@@ -795,7 +795,7 @@ async def process_webhook(request: Request):
 async def startup():
     """Запуск сервера"""
     print("\n" + "="*50)
-    print("🚀 ARTYOM INTEGRATOR WEBHOOK SERVER")
+    print("🚀 TEXTILE PRO BOT WEBHOOK SERVER")
     print("="*50)
     
     # Очищаем webhook при старте
@@ -828,7 +828,7 @@ async def startup():
                 print("❌ Webhook не установлен")
             
             # Устанавливаем webhook
-            webhook_url = os.getenv("WEBHOOK_URL", "https://artyom-integrator-production.up.railway.app/webhook")
+            webhook_url = os.getenv("WEBHOOK_URL", "https://bot-production-472c.up.railway.app/webhook")
             result = bot.set_webhook(
                 url=webhook_url,
                 secret_token=WEBHOOK_SECRET_TOKEN,
@@ -859,7 +859,7 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     """Остановка сервера"""
-    logger.info("🛑 Остановка Artyom Integrator Webhook Server")
+    logger.info("🛑 Остановка Textile Pro Bot Webhook Server")
     print("🛑 Сервер остановлен")
 
 if __name__ == "__main__":
