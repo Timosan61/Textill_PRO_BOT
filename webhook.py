@@ -709,7 +709,7 @@ async def process_webhook(request: Request):
                 else:
                     # Fallback: если нет connection_id
                     bot.send_message(chat_id, response)
-                    logger.warning(f"⚠️ Запрос о business вложении отправлен БЕЗ Business API (нет connection_id)"
+                    logger.warning(f"⚠️ Запрос о business вложении отправлен БЕЗ Business API (нет connection_id)")
                 
                 return {"ok": True, "action": "asked_about_business_attachment"}
             
@@ -765,7 +765,7 @@ async def process_webhook(request: Request):
                         logger.error(f"❌ КРИТИЧНО: Получен business_message без connection_id! chat_id={chat_id}, user={user_name}")
                         # Пробуем отправить как обычное сообщение
                         bot.send_message(chat_id, response)
-                        logger.warning(f"⚠️ Отправлено как обычное сообщение (fallback)"
+                        logger.warning(f"⚠️ Отправлено как обычное сообщение (fallback)")
                     
                     print(f"✅ Business ответ отправлен клиенту {user_name}")
                     
