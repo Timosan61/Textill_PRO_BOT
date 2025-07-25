@@ -136,6 +136,9 @@ from collections import deque
 last_updates = deque(maxlen=10)
 update_counter = 0
 
+# Хранилище владельцев Business Connection для фильтрации сообщений
+business_owners = {}  # {business_connection_id: owner_user_id}
+
 @app.get("/")
 async def health_check():
     """Health check endpoint"""
@@ -152,7 +155,9 @@ async def health_check():
             "endpoints": {
                 "webhook_info": "/webhook/info",
                 "set_webhook": "/webhook/set",
-                "delete_webhook": "/webhook (DELETE method)"
+                "delete_webhook": "/webhook (DELETE method)",
+                "business_owners": "/debug/business-owners",
+                "last_updates": "/debug/last-updates"
             },
             "hint": "Используйте /webhook/set в браузере для установки webhook"
         }
@@ -284,6 +289,20 @@ async def get_session_memory(session_id: str):
         
         return memory_info
         
+    except Exception as e:
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+@app.get("/debug/business-owners")
+async def get_business_owners():
+    """Получить список владельцев Business Connections для мониторинга фильтрации"""
+    try:
+        return {
+            "total_connections": len(business_owners),
+            "business_owners": business_owners,
+            "filter_status": "✅ АКТИВНА" if business_owners else "⚠️ НЕАКТИВНА",
+            "description": "Список ID владельцев аккаунтов, сообщения которых будут игнорироваться ботом",
+            "current_time": datetime.now().isoformat()
+        }
     except Exception as e:
         return {"error": str(e), "traceback": traceback.format_exc()}
 
@@ -615,10 +634,25 @@ async def process_webhook(request: Request):
             
             # Логируем business_connection_id для отладки
             logger.info(f"📊 Business message - connection_id: '{business_connection_id}' (тип: {type(business_connection_id)})")
+            logger.info(f"👤 Сообщение от: {user_name} (ID: {user_id})")
             
             # Проверяем наличие business_connection_id
             if not business_connection_id:
                 logger.warning(f"⚠️ Business message без connection_id от {user_name} ({user_id})")
+                
+            # 🚫 КРИТИЧНАЯ ПРОВЕРКА: Игнорируем сообщения от владельца аккаунта
+            if business_connection_id and business_connection_id in business_owners:
+                owner_id = business_owners[business_connection_id]
+                if str(user_id) == str(owner_id):
+                    logger.info(f"🚫 ИГНОРИРУЕМ сообщение от владельца аккаунта: {user_name} (ID: {user_id})")
+                    logger.info(f"💬 Текст сообщения: '{text[:100]}{'...' if len(text) > 100 else ''}'")
+                    return {"ok": True, "action": "ignored_owner_message", "reason": "message_from_business_owner"}
+                else:
+                    logger.info(f"✅ ОБРАБАТЫВАЕМ сообщение от клиента: {user_name} (ID: {user_id})")
+            else:
+                # Если нет информации о владельце, логируем это
+                logger.warning(f"⚠️ Не найден владелец для connection_id: {business_connection_id}. Обрабатываем сообщение.")
+                logger.info(f"📊 Известные владельцы: {list(business_owners.keys())}")
             
             # Проверяем наличие вложений в business сообщении
             attachments, attachments_details = has_attachments(bus_msg)
@@ -662,11 +696,11 @@ async def process_webhook(request: Request):
                 else:
                     response = "Вложения получила. Прокомментируйте, пожалуйста, что именно сейчас отправили?"
                 
-                # Отправляем ответ через Business API
+                # Отправляем ответ через Business API (только для клиентов, не владельцев)
                 if business_connection_id:
                     result = send_business_message(chat_id, response, business_connection_id)
                     if result:
-                        logger.info(f"✅ Отправлен запрос о business вложении пользователю {user_name}")
+                        logger.info(f"✅ Отправлен запрос о business вложении клиенту {user_name}")
                     else:
                         logger.error(f"❌ Не удалось отправить запрос о business вложении")
                         # Fallback: отправляем обычное сообщение
@@ -675,11 +709,12 @@ async def process_webhook(request: Request):
                 else:
                     # Fallback: если нет connection_id
                     bot.send_message(chat_id, response)
-                    logger.warning(f"⚠️ Запрос о business вложении отправлен БЕЗ Business API (нет connection_id)")
+                    logger.warning(f"⚠️ Запрос о business вложении отправлен БЕЗ Business API (нет connection_id)"
                 
                 return {"ok": True, "action": "asked_about_business_attachment"}
             
             # Обрабатываем business сообщения с текстом (с вложениями или без)
+            # Проверяем, что это НЕ сообщение от владельца (дополнительная проверка)
             if text:
                 try:
                     logger.info(f"🔄 Начинаю обработку business message: text='{text}', chat_id={chat_id}")
@@ -716,13 +751,13 @@ async def process_webhook(request: Request):
                         logger.info(f"🤖 AI отключен, использую стандартный ответ")
                         response = f"👋 Здравствуйте, {user_name}!\n\nМеня зовут Елена, я менеджер компании Textile Pro.\n\nПодготовлю ответ на ваш вопрос о текстильном производстве. Минуточку!"
                     
-                    # Для business_message используем специальную функцию
-                    logger.info(f"📤 Пытаюсь отправить ответ...")
+                    # Для business_message используем специальную функцию (только для клиентов)
+                    logger.info(f"📤 Пытаюсь отправить ответ клиенту {user_name}...")
                     if business_connection_id:
                         logger.info(f"📤 Отправляю через Business API с connection_id='{business_connection_id}'")
                         result = send_business_message(chat_id, response, business_connection_id)
                         if result:
-                            logger.info(f"✅ Business ответ отправлен в чат {chat_id} с connection_id='{business_connection_id}'")
+                            logger.info(f"✅ Business ответ отправлен клиенту в чат {chat_id} с connection_id='{business_connection_id}'")
                         else:
                             logger.error(f"❌ Не удалось отправить через Business API")
                     else:
@@ -730,9 +765,9 @@ async def process_webhook(request: Request):
                         logger.error(f"❌ КРИТИЧНО: Получен business_message без connection_id! chat_id={chat_id}, user={user_name}")
                         # Пробуем отправить как обычное сообщение
                         bot.send_message(chat_id, response)
-                        logger.warning(f"⚠️ Отправлено как обычное сообщение (fallback)")
+                        logger.warning(f"⚠️ Отправлено как обычное сообщение (fallback)"
                     
-                    print(f"✅ Business ответ отправлен пользователю {user_name}")
+                    print(f"✅ Business ответ отправлен клиенту {user_name}")
                     
                 except Exception as e:
                     # Детальное логирование ошибки с traceback
@@ -759,7 +794,7 @@ async def process_webhook(request: Request):
                     try:
                         error_message = "Извините, произошла техническая ошибка. Попробуйте написать снова или обратитесь ко мне напрямую.\n\nЕлена, Textile Pro"
                         
-                        # Если есть business_connection_id - используем его
+                        # Отправляем ошибку только клиентам, не владельцам аккаунта
                         if business_connection_id:
                             result = send_business_message(chat_id, error_message, business_connection_id)
                             if result:
@@ -780,10 +815,24 @@ async def process_webhook(request: Request):
         elif "business_connection" in update_dict:
             conn = update_dict["business_connection"]
             is_enabled = conn.get("is_enabled", False)
-            user_name = conn.get("user", {}).get("first_name", "Пользователь")
+            connection_id = conn.get("id")
+            user_info = conn.get("user", {})
+            user_name = user_info.get("first_name", "Пользователь")
+            owner_user_id = user_info.get("id")
+            
+            # Сохраняем владельца Business Connection для фильтрации сообщений
+            if connection_id and owner_user_id:
+                if is_enabled:
+                    business_owners[connection_id] = owner_user_id
+                    logger.info(f"✅ Сохранен владелец Business Connection: {user_name} (ID: {owner_user_id}) для connection_id: {connection_id}")
+                else:
+                    # Удаляем при отключении
+                    business_owners.pop(connection_id, None)
+                    logger.info(f"❌ Удален владелец Business Connection: {user_name} (connection_id: {connection_id})")
             
             status = "✅ Подключен" if is_enabled else "❌ Отключен"
             logger.info(f"{status} к Business аккаунту: {user_name}")
+            logger.info(f"📊 Всего активных Business Connection: {len(business_owners)}")
         
         return {"ok": True, "status": "processed", "update_id": update_counter}
         
