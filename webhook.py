@@ -454,6 +454,26 @@ def has_attachments(message):
     
     return attachments_found, attachments_details
 
+def is_message_too_old(message_timestamp, max_age_minutes=5):
+    """Проверка, не слишком ли старое сообщение для обработки"""
+    if not message_timestamp:
+        return False
+    
+    from datetime import datetime, timezone
+    try:
+        # Текущее время в UTC
+        now = datetime.now(timezone.utc)
+        # Время сообщения (timestamp в секундах)
+        message_time = datetime.fromtimestamp(message_timestamp, tz=timezone.utc)
+        
+        # Разница в минутах
+        age_minutes = (now - message_time).total_seconds() / 60
+        
+        return age_minutes > max_age_minutes
+    except Exception as e:
+        logger.warning(f"⚠️ Ошибка проверки времени сообщения: {e}")
+        return False
+
 @app.post("/webhook")
 async def process_webhook(request: Request):
     """Главный обработчик webhook"""
@@ -472,6 +492,23 @@ async def process_webhook(request: Request):
         print(f"📨 Обработка webhook update...")
         
         update_dict = json.loads(json_string)
+        
+        # Проверяем возраст сообщения для фильтрации старых обновлений
+        message_timestamp = None
+        message_type = "unknown"
+        
+        if "message" in update_dict:
+            message_timestamp = update_dict["message"].get("date")
+            message_type = "message"
+        elif "business_message" in update_dict:
+            message_timestamp = update_dict["business_message"].get("date")
+            message_type = "business_message"
+        
+        # Фильтруем старые сообщения (но обрабатываем connections и другие события)
+        if message_timestamp and is_message_too_old(message_timestamp):
+            age_minutes = (datetime.now().timestamp() - message_timestamp) / 60
+            logger.info(f"⏰ Пропускаем старое сообщение ({message_type}): возраст {age_minutes:.1f} мин")
+            return {"ok": True, "status": "ignored_old_message", "age_minutes": round(age_minutes, 1)}
         
         # Сохраняем update для отладки
         update_counter += 1
