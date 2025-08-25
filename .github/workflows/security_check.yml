@@ -1,0 +1,45 @@
+name: Security Monitor
+
+on:
+  schedule:
+    # Проверка каждый час
+    - cron: '0 * * * *'
+  workflow_dispatch:  # Возможность запуска вручную
+
+jobs:
+  security-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install requests python-dotenv
+    
+    - name: Run Security Check
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        WEBHOOK_SECRET_TOKEN: ${{ secrets.WEBHOOK_SECRET_TOKEN }}
+        ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
+      run: |
+        python scripts/security_monitor.py
+    
+    - name: Notify on failure
+      if: failure()
+      uses: appleboy/telegram-action@master
+      with:
+        to: ${{ secrets.ADMIN_CHAT_ID }}
+        token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        message: |
+          ⚠️ Security Check Failed!
+          
+          Repository: ${{ github.repository }}
+          Check the webhook immediately!
+          
+          Run ID: ${{ github.run_id }}

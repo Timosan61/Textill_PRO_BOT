@@ -1,6 +1,19 @@
+# ⚠️ SECURITY - NEVER COMMIT THESE FILES
 # Environment files
 .env
 *.env
+.env.*
+.env.local
+.env.production
+deploy/.env.*
+
+# 🔐 Secrets and tokens - CRITICAL
+*token*.txt
+*secret*.txt
+*api_key*.txt
+*password*.txt
+credentials.json
+secrets.json
 
 # Python
 __pycache__/
