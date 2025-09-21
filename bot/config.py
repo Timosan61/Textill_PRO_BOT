@@ -11,7 +11,7 @@ BOT_USERNAME = os.getenv('BOT_USERNAME')
 # Абсолютный путь к файлу инструкций
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INSTRUCTION_FILE = os.path.join(BASE_DIR, 'data', 'instruction.json')
-OPENAI_MODEL = 'gpt-4o'
+OPENAI_MODEL = 'gpt-4o-mini'  # Используем более экономичную модель
 
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN не найден в переменных окружения")
