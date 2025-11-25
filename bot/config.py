@@ -11,6 +11,7 @@ BOT_USERNAME = os.getenv('BOT_USERNAME')
 # Абсолютный путь к файлу инструкций
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INSTRUCTION_FILE = os.path.join(BASE_DIR, 'data', 'instruction.json')
+DATABASE_PATH = os.path.join(BASE_DIR, 'data', 'bot.db')  # SQLite БД для business_owners
 OPENAI_MODEL = 'gpt-4o-mini'  # Используем более экономичную модель
 
 if not TELEGRAM_BOT_TOKEN:

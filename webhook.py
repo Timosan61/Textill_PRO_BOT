@@ -33,7 +33,11 @@ try:
     import bot
     print("✅ Модуль bot найден")
     from bot.agent import agent
+    from bot.config import DATABASE_PATH
+    from bot.database import BusinessOwnersDB
+    from bot.loop_detector import LoopDetector
     print("✅ AI Agent загружен успешно")
+    print("✅ Database и Loop Detector модули загружены")
     AI_ENABLED = True
 except ImportError as e:
     print(f"⚠️ AI Agent не доступен: {e}")
@@ -136,8 +140,10 @@ from collections import deque
 last_updates = deque(maxlen=10)
 update_counter = 0
 
-# Хранилище владельцев Business Connection для фильтрации сообщений
-business_owners = {}  # {business_connection_id: owner_user_id}
+# ✅ НОВОЕ: БД для хранения владельцев Business Connection и защита от петли
+# Заменяет глобальный словарь business_owners на персистентное хранилище
+db = None  # BusinessOwnersDB - инициализируется в startup()
+loop_detector = None  # LoopDetector - инициализируется в startup()
 
 @app.get("/")
 async def health_check():
@@ -296,11 +302,35 @@ async def get_session_memory(session_id: str):
 async def get_business_owners():
     """Получить список владельцев Business Connections для мониторинга фильтрации"""
     try:
+        if db is None:
+            return {"error": "БД не инициализирована", "total_connections": 0}
+
+        owners = await db.get_all_owners()
+        stats = await db.get_stats()
+
         return {
-            "total_connections": len(business_owners),
-            "business_owners": business_owners,
-            "filter_status": "✅ АКТИВНА" if business_owners else "⚠️ НЕАКТИВНА",
+            "total_connections": stats.get("active_connections", 0),
+            "business_owners": owners,
+            "filter_status": "✅ АКТИВНА" if owners else "⚠️ НЕАКТИВНА (БД пустая)",
             "description": "Список ID владельцев аккаунтов, сообщения которых будут игнорироваться ботом",
+            "db_stats": stats,
+            "current_time": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+@app.get("/debug/loop-detector")
+async def get_loop_detector_stats():
+    """Получить статистику работы детектора петли"""
+    try:
+        if loop_detector is None:
+            return {"error": "Loop Detector не инициализирован"}
+
+        stats = loop_detector.get_stats()
+        return {
+            "status": "✅ АКТИВЕН",
+            "stats": stats,
+            "description": "Защита от бесконечной петли ответов бота",
             "current_time": datetime.now().isoformat()
         }
     except Exception as e:
@@ -676,20 +706,35 @@ async def process_webhook(request: Request):
             # Проверяем наличие business_connection_id
             if not business_connection_id:
                 logger.warning(f"⚠️ Business message без connection_id от {user_name} ({user_id})")
-                
-            # 🚫 КРИТИЧНАЯ ПРОВЕРКА: Игнорируем сообщения от владельца аккаунта
-            if business_connection_id and business_connection_id in business_owners:
-                owner_id = business_owners[business_connection_id]
-                if str(user_id) == str(owner_id):
+
+            # 🚫 КРИТИЧНАЯ ПРОВЕРКА #1: Игнорируем сообщения от владельца аккаунта (БД)
+            if business_connection_id and db is not None:
+                is_owner = await db.is_owner_message(business_connection_id, user_id)
+                if is_owner:
                     logger.info(f"🚫 ИГНОРИРУЕМ сообщение от владельца аккаунта: {user_name} (ID: {user_id})")
                     logger.info(f"💬 Текст сообщения: '{text[:100]}{'...' if len(text) > 100 else ''}'")
                     return {"ok": True, "action": "ignored_owner_message", "reason": "message_from_business_owner"}
                 else:
                     logger.info(f"✅ ОБРАБАТЫВАЕМ сообщение от клиента: {user_name} (ID: {user_id})")
             else:
-                # Если нет информации о владельце, логируем это
-                logger.warning(f"⚠️ Не найден владелец для connection_id: {business_connection_id}. Обрабатываем сообщение.")
-                logger.info(f"📊 Известные владельцы: {list(business_owners.keys())}")
+                # Если БД не доступна, предупреждаем
+                if db is None:
+                    logger.error(f"❌ КРИТИЧНО: БД не инициализирована, фильтрация владельца НЕ РАБОТАЕТ!")
+                else:
+                    logger.warning(f"⚠️ Business message без connection_id, невозможно проверить владельца")
+
+            # 🚫 КРИТИЧНАЯ ПРОВЕРКА #2: Защита от бесконечной петли
+            if loop_detector is not None and text:
+                should_ignore, reason = loop_detector.should_ignore_message(
+                    text=text,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    from_business_api=True
+                )
+                if should_ignore:
+                    logger.warning(f"🚫 LOOP DETECTED: Игнорируем сообщение по причине: {reason}")
+                    logger.info(f"💬 Текст сообщения: '{text[:100]}{'...' if len(text) > 100 else ''}'")
+                    return {"ok": True, "action": "ignored_loop_detected", "reason": reason}
             
             # Проверяем наличие вложений в business сообщении
             attachments, attachments_details = has_attachments(bus_msg)
@@ -795,6 +840,11 @@ async def process_webhook(request: Request):
                         result = send_business_message(chat_id, response, business_connection_id)
                         if result:
                             logger.info(f"✅ Business ответ отправлен клиенту в чат {chat_id} с connection_id='{business_connection_id}'")
+
+                            # ✅ НОВОЕ: Отслеживаем ответ бота для защиты от петли
+                            if loop_detector is not None:
+                                loop_detector.track_bot_response(response, chat_id)
+                                logger.debug(f"✅ Ответ бота отслежен в loop detector")
                         else:
                             logger.error(f"❌ Не удалось отправить через Business API")
                     else:
@@ -803,7 +853,7 @@ async def process_webhook(request: Request):
                         # Пробуем отправить как обычное сообщение
                         bot.send_message(chat_id, response)
                         logger.warning(f"⚠️ Отправлено как обычное сообщение (fallback)")
-                    
+
                     print(f"✅ Business ответ отправлен клиенту {user_name}")
                     
                 except Exception as e:
@@ -855,21 +905,36 @@ async def process_webhook(request: Request):
             connection_id = conn.get("id")
             user_info = conn.get("user", {})
             user_name = user_info.get("first_name", "Пользователь")
+            owner_username = user_info.get("username")
             owner_user_id = user_info.get("id")
-            
-            # Сохраняем владельца Business Connection для фильтрации сообщений
-            if connection_id and owner_user_id:
+
+            # ✅ НОВОЕ: Сохраняем владельца в БД для персистентного хранения
+            if connection_id and owner_user_id and db is not None:
                 if is_enabled:
-                    business_owners[connection_id] = owner_user_id
-                    logger.info(f"✅ Сохранен владелец Business Connection: {user_name} (ID: {owner_user_id}) для connection_id: {connection_id}")
+                    success = await db.save_business_owner(
+                        connection_id=connection_id,
+                        owner_user_id=owner_user_id,
+                        owner_name=user_name,
+                        owner_username=owner_username,
+                        is_active=True
+                    )
+                    if success:
+                        logger.info(f"✅ Владелец сохранен в БД: {user_name} (@{owner_username}) ID: {owner_user_id}")
+                        logger.info(f"   connection_id: {connection_id}")
                 else:
-                    # Удаляем при отключении
-                    business_owners.pop(connection_id, None)
-                    logger.info(f"❌ Удален владелец Business Connection: {user_name} (connection_id: {connection_id})")
-            
+                    # Деактивируем при отключении
+                    await db.deactivate_connection(connection_id)
+                    logger.info(f"❌ Business Connection деактивирован: {user_name} (connection_id: {connection_id})")
+
+                # Получаем статистику
+                stats = await db.get_stats()
+                active_count = stats.get("active_connections", 0)
+                logger.info(f"📊 Всего активных Business Connection в БД: {active_count}")
+            elif db is None:
+                logger.error(f"❌ КРИТИЧНО: БД не инициализирована, невозможно сохранить владельца!")
+
             status = "✅ Подключен" if is_enabled else "❌ Отключен"
             logger.info(f"{status} к Business аккаунту: {user_name}")
-            logger.info(f"📊 Всего активных Business Connection: {len(business_owners)}")
         
         return {"ok": True, "status": "processed", "update_id": update_counter}
         
@@ -880,17 +945,45 @@ async def process_webhook(request: Request):
 @app.on_event("startup")
 async def startup():
     """Запуск сервера"""
+    global db, loop_detector
+
     print("\n" + "="*50)
     print("🚀 TEXTILE PRO BOT WEBHOOK SERVER")
     print("="*50)
-    
+
+    # ✅ НОВОЕ: Инициализируем БД и Loop Detector ПЕРЕД всем остальным
+    if AI_ENABLED:
+        try:
+            # Инициализация БД
+            db = BusinessOwnersDB(DATABASE_PATH)
+            await db.init_db()
+            stats = await db.get_stats()
+            print(f"✅ SQLite БД инициализирована: {DATABASE_PATH}")
+            print(f"📊 Активных владельцев в БД: {stats.get('active_connections', 0)}")
+
+            # Инициализация Loop Detector
+            loop_detector = LoopDetector(
+                min_message_interval=2.0,
+                max_recent_messages=50,
+                duplicate_window=300
+            )
+            print("✅ Loop Detector инициализирован")
+            print("🔒 Защита от бесконечной петли: АКТИВНА")
+
+        except Exception as e:
+            logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА инициализации БД/Loop Detector: {e}")
+            print(f"❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
+            print("⚠️ Бот продолжит работу БЕЗ фильтрации владельца!")
+    else:
+        print("⚠️ AI отключен, БД и Loop Detector не инициализированы")
+
     # Очищаем webhook при старте
     try:
         bot.delete_webhook()
         print("🧹 Webhook очищен")
     except:
         pass
-    
+
     try:
         bot_info = bot.get_me()
         print(f"🤖 Бот: @{bot_info.username}")
@@ -900,6 +993,8 @@ async def startup():
         print("❌ Polling: ОТКЛЮЧЕН")
         print(f"🤖 AI: {'✅ ВКЛЮЧЕН' if AI_ENABLED else '❌ ОТКЛЮЧЕН'}")
         print(f"🔑 OpenAI API: {'✅ Настроен' if os.getenv('OPENAI_API_KEY') else '❌ Не настроен'}")
+        print(f"🗄️ БД: {'✅ ИНИЦИАЛИЗИРОВАНА' if db else '❌ НЕ ДОСТУПНА'}")
+        print(f"🔒 Loop Detector: {'✅ АКТИВЕН' if loop_detector else '❌ НЕ АКТИВЕН'}")
         print("="*50)
         logger.info("✅ Бот инициализирован успешно")
         
